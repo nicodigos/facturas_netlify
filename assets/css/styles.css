@@ -622,16 +622,96 @@ tbody tr:hover {
   background: rgba(227, 238, 250, 0.65);
 }
 
-tbody input[type="checkbox"] {
-  transform: scale(1.08);
-}
-
 tbody input[type="text"] {
   min-width: 140px;
   min-height: 38px;
   padding: 8px 10px;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-sm);
+}
+
+.table-pill,
+.status-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.table-pill {
+  padding: 8px 14px;
+  border: 1px solid transparent;
+}
+
+.receipt-pill.is-bank-transaction {
+  background: #e8f1ff;
+  border-color: #cfe0fb;
+  color: #275289;
+}
+
+.receipt-pill.is-reimbursement {
+  background: #fff1e4;
+  border-color: #ffd9b8;
+  color: #b65d18;
+}
+
+.status-toggle {
+  gap: 10px;
+  padding: 6px 12px 6px 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  transition: transform 140ms ease, box-shadow 140ms ease, background 140ms ease;
+}
+
+.status-toggle:hover {
+  transform: translateY(-1px);
+}
+
+.status-toggle:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(47, 120, 187, 0.16);
+}
+
+.status-toggle-track {
+  position: relative;
+  width: 38px;
+  height: 22px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.75);
+  border: 1px solid rgba(37, 61, 92, 0.12);
+}
+
+.status-toggle-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: currentColor;
+  transition: transform 160ms ease;
+}
+
+.status-toggle.is-paid {
+  background: #e6f6eb;
+  border-color: #cae9d2;
+  color: #2f7a4f;
+}
+
+.status-toggle.is-paid .status-toggle-thumb {
+  transform: translateX(16px);
+}
+
+.status-toggle.is-pending {
+  background: #fff1e4;
+  border-color: #ffdabc;
+  color: #b76521;
 }
 
 .pagination-bar {

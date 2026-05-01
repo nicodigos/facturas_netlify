@@ -97,8 +97,23 @@ function parseCsv(text) {
   const workbook = XLSX.read(text, { type: "string" });
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
   const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
-  return rows.map((row) => ({
-    ...row,
-    checked: String(row.checked).toLowerCase() === "true" || row.checked === true,
-  }));
+  return rows.map((row) => {
+    const legacyChecked = String(row.checked).toLowerCase() === "true" || row.checked === true;
+    const normalizedStatus = normalizeStatus(row.status || (legacyChecked ? "Paid" : "Pending"));
+    const normalizedReceiptType = normalizeReceiptType(row.receipt_type);
+    const { checked, ...rest } = row;
+    return {
+      ...rest,
+      receipt_type: normalizedReceiptType,
+      status: normalizedStatus,
+    };
+  });
+}
+
+function normalizeStatus(value) {
+  return String(value).trim().toLowerCase() === "paid" ? "Paid" : "Pending";
+}
+
+function normalizeReceiptType(value) {
+  return String(value).trim().toLowerCase() === "reimbursement" ? "reimbursement" : "bank_transaction";
 }

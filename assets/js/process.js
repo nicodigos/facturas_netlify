@@ -70,7 +70,7 @@ export async function processUploadedPdf(elements) {
     });
 
     const row = {
-      checked: false,
+      status: "Pending",
       processed_at: new Date().toISOString().slice(0, 19),
       source_page_number: page.pageNumber,
       receipt_type: receiptType,

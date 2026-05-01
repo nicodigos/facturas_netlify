@@ -46,17 +46,19 @@ export async function refreshDatabase(elements) {
 export function renderFilters(container) {
   container.innerHTML = "";
 
-  const checkedGroup = document.createElement("div");
-  checkedGroup.className = "filter-group";
-  checkedGroup.innerHTML = `
-    <label for="filter-checked">Checked status</label>
-    <select id="filter-checked">
+  const statusGroup = document.createElement("div");
+  statusGroup.className = "filter-group";
+  statusGroup.innerHTML = `
+    <label for="filter-status">Status</label>
+    <select id="filter-status">
       <option value="all">all</option>
-      <option value="unchecked">unchecked</option>
-      <option value="checked">checked</option>
+      <option value="Pending">Pending</option>
+      <option value="Paid">Paid</option>
     </select>
   `;
-  container.append(checkedGroup);
+  container.append(statusGroup);
+
+  renderSelectFilter(container, "receipt_type");
 
   const searchGroup = document.createElement("div");
   searchGroup.className = "filter-group";
@@ -120,30 +122,18 @@ export function renderFilters(container) {
     syncRange();
   });
 
-  FILTER_COLUMNS.forEach((column) => {
-    const values = [...new Set(state.databaseRows.map((row) => String(row[column] ?? "")).filter(Boolean))].sort();
-    const group = document.createElement("div");
-    group.className = "filter-group";
-    const options = ['<option value="">all</option>', ...values.map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(displayValue(column, value))}</option>`)];
-    group.innerHTML = `
-      <label for="filter-${column}">${formatColumnLabel(column)}</label>
-      <select id="filter-${column}">
-        ${options.join("")}
-      </select>
-    `;
-    container.append(group);
+  FILTER_COLUMNS.filter((column) => column !== "receipt_type").forEach((column) => {
+    renderSelectFilter(container, column);
   });
 }
 
 export function applyFilters(elements) {
-  const checkedStatus = document.querySelector("#filter-checked")?.value || "all";
+  const statusFilter = document.querySelector("#filter-status")?.value || "all";
   const textQuery = (document.querySelector("#filter-text")?.value || "").trim().toLowerCase();
   let rows = [...state.databaseRows];
 
-  if (checkedStatus === "checked") {
-    rows = rows.filter((row) => Boolean(row.checked));
-  } else if (checkedStatus === "unchecked") {
-    rows = rows.filter((row) => !row.checked);
+  if (statusFilter !== "all") {
+    rows = rows.filter((row) => normalizeStatus(row.status) === statusFilter);
   }
 
   DATE_FILTER_COLUMNS.forEach(({ key }) => {
@@ -173,7 +163,7 @@ export function applyFilters(elements) {
   FILTER_COLUMNS.forEach((column) => {
     const selected = document.querySelector(`#filter-${column}`)?.value || "";
     if (selected) {
-      rows = rows.filter((row) => String(row[column] ?? "") === selected);
+      rows = rows.filter((row) => getFilterValue(column, row[column]) === selected);
     }
   });
 
@@ -189,7 +179,7 @@ export function applyFilters(elements) {
 function renderDatabaseTable(elements) {
   const { dbTableHead: head, dbTableBody: body } = elements;
   const rowColumns = collectRowColumns(state.databaseRows).filter((column) => column !== "checked");
-  const columns = rowColumns.length ? ["checked", ...rowColumns] : [];
+  const columns = prioritizeColumns(rowColumns);
   if (!columns.length) {
     head.innerHTML = "";
     body.innerHTML = "";
@@ -214,11 +204,22 @@ function renderDatabaseTable(elements) {
 }
 
 function renderCell(column, value) {
-  if (column === "checked") {
-    return `<td><input data-column="checked" type="checkbox" ${value ? "checked" : ""}></td>`;
+  if (column === "status") {
+    const status = normalizeStatus(value);
+    const pressed = status === "Paid";
+    return `<td>
+      <button class="status-toggle is-${status.toLowerCase()}" data-column="status" data-status="${status}" type="button" aria-pressed="${pressed}">
+        <span class="status-toggle-track">
+          <span class="status-toggle-thumb"></span>
+        </span>
+        <span class="status-toggle-label">${status}</span>
+      </button>
+    </td>`;
   }
   if (column === "receipt_type") {
-    return `<td>${escapeHtml(displayValue(column, value))}</td>`;
+    const normalized = normalizeReceiptType(value);
+    const tone = normalized === "reimbursement" ? "reimbursement" : "bank-transaction";
+    return `<td><span class="table-pill receipt-pill is-${tone}">${escapeHtml(displayValue(column, value))}</span></td>`;
   }
   if (column === "gpt_description") {
     return `<td>${escapeHtml(value)}</td>`;
@@ -257,8 +258,8 @@ export function syncEditedRowsFromDom() {
     const filePath = tr.dataset.filePath;
     const match = state.databaseRows.find((row) => row.file_path === filePath);
     if (!match) return;
-    const checkedInput = tr.querySelector('input[data-column="checked"]');
-    match.checked = Boolean(checkedInput?.checked);
+    const statusToggle = tr.querySelector('button[data-column="status"]');
+    match.status = normalizeStatus(statusToggle?.dataset.status);
   });
 }
 
@@ -332,11 +333,45 @@ function escapeHtml(value) {
 }
 
 function displayValue(column, value) {
+  if (column === "status") {
+    return normalizeStatus(value);
+  }
   if (column === "receipt_type") {
-    return value === "reimbursement" ? "Reembolso" : "Transaccion bancaria";
+    return normalizeReceiptType(value) === "reimbursement" ? "Reembolso" : "Transaccion bancaria";
   }
   return column === "card_last4" ? displayCardLast4(value) : value;
 }
+
+function prioritizeColumns(columns) {
+  if (!columns.length) return [];
+  const preferredOrder = ["status", "receipt_type"];
+  const unique = columns.filter((column, index) => columns.indexOf(column) === index);
+  const front = preferredOrder.filter((column) => unique.includes(column));
+  const rest = unique.filter((column) => !front.includes(column));
+  return [...front, ...rest];
+}
+
+function normalizeStatus(value) {
+  return String(value).trim().toLowerCase() === "paid" ? "Paid" : "Pending";
+}
+
+function normalizeReceiptType(value) {
+  return String(value).trim().toLowerCase() === "reimbursement" ? "reimbursement" : "bank_transaction";
+}
+
+document.addEventListener("click", (event) => {
+  const toggle = event.target.closest(".status-toggle");
+  if (!toggle) return;
+  const nextStatus = toggle.dataset.status === "Paid" ? "Pending" : "Paid";
+  toggle.dataset.status = nextStatus;
+  toggle.dataset.column = "status";
+  toggle.dataset.status = nextStatus;
+  toggle.classList.toggle("is-paid", nextStatus === "Paid");
+  toggle.classList.toggle("is-pending", nextStatus === "Pending");
+  toggle.setAttribute("aria-pressed", String(nextStatus === "Paid"));
+  const label = toggle.querySelector(".status-toggle-label");
+  if (label) label.textContent = nextStatus;
+});
 
 function updatePagination(elements, totalPages, shownCount = 0, totalRows = state.filteredRows.length, startIndex = 0) {
   const hasRows = state.filteredRows.length > 0;
@@ -359,4 +394,25 @@ function extractDateOnly(value) {
 
 function formatRangeValue(value) {
   return Number(value).toFixed(2).replace(/\.00$/, "");
+}
+
+function renderSelectFilter(container, column) {
+  const values = [...new Set(state.databaseRows.map((row) => getFilterValue(column, row[column])).filter(Boolean))].sort();
+  const group = document.createElement("div");
+  group.className = "filter-group";
+  const options = ['<option value="">all</option>', ...values.map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(displayValue(column, value))}</option>`)];
+  group.innerHTML = `
+    <label for="filter-${column}">${formatColumnLabel(column)}</label>
+    <select id="filter-${column}">
+      ${options.join("")}
+    </select>
+  `;
+  container.append(group);
+}
+
+function getFilterValue(column, value) {
+  if (column === "receipt_type") {
+    return normalizeReceiptType(value);
+  }
+  return String(value ?? "");
 }

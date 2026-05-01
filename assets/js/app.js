@@ -138,7 +138,7 @@ function wireButtons() {
       if (input.type === "range") {
         input.value = input.id.endsWith("-min") ? input.min : input.max;
       } else {
-        input.value = input.id === "filter-checked" ? "all" : "";
+        input.value = input.id === "filter-status" ? "all" : "";
       }
     });
     document.querySelectorAll(".range-filter-values span").forEach((label) => {
@@ -354,7 +354,7 @@ function escapeHtml(value) {
 
 function displaySummaryValue(column, value) {
   if (column === "receipt_type") {
-    return value === "reimbursement" ? "Reembolso" : "Transaccion bancaria";
+    return String(value).trim().toLowerCase() === "reimbursement" ? "Reembolso" : "Transaccion bancaria";
   }
   return value;
 }
