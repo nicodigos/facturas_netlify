@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lector de Facturas</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./assets/css/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="hero">
+      <div class="hero-top">
+        <div class="hero-side hero-side-left">
+          <button id="show-filters-btn" class="show-filters-btn header-toggle" type="button" hidden aria-label="Mostrar filtros">+</button>
+        </div>
+        <div class="hero-center">
+          <h1>Lector de facturas</h1>
+          <nav class="header-nav">
+            <button class="tab-button is-active" data-tab-target="database-tab" type="button">Base de datos</button>
+            <button class="tab-button" data-tab-target="upload-tab" type="button">Cargar facturas</button>
+          </nav>
+        </div>
+        <div class="hero-side hero-side-right">
+          <button id="microsoft-auth-btn" class="microsoft-auth-btn" type="button">
+            <img src="./assets/img/microsoft-svgrepo-com.svg" alt="" aria-hidden="true">
+            <span>Conectar</span>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <section id="main-panel" class="panel" hidden>
+        <div id="flash" class="flash" hidden></div>
+
+        <section id="database-tab" class="tab-panel is-active">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">SharePoint</p>
+              <h2>Recibos procesados</h2>
+            </div>
+            <div class="toolbar">
+              <button id="refresh-db-btn" class="btn btn-secondary" type="button">Recargar</button>
+              <button id="save-db-btn" class="btn btn-primary" type="button">Guardar checks</button>
+              <button id="download-excel-btn" class="btn btn-secondary" type="button">Descargar Excel</button>
+              <button id="download-pdfs-btn" class="btn btn-secondary" type="button">Descargar PDFs</button>
+            </div>
+          </div>
+
+          <div id="database-layout" class="layout-grid sidebar-overlay-layout">
+            <aside id="filters-sidebar" class="sidebar-card">
+              <div class="sidebar-header">
+                <h3>Filtros</h3>
+                <button id="hide-filters-btn" class="sidebar-close-btn" type="button" aria-label="Ocultar filtros">+</button>
+              </div>
+              <div id="filters-accordion-panel" class="sidebar-accordion-panel is-open">
+                <div class="sidebar-accordion-content">
+                  <div class="sidebar-title-row">
+                    <button id="clear-filters-btn" class="text-button" type="button">Limpiar</button>
+                  </div>
+                  <div id="filters-container" class="filter-stack"></div>
+                </div>
+              </div>
+            </aside>
+            <button id="sidebar-backdrop" class="sidebar-backdrop" type="button" hidden aria-label="Cerrar filtros"></button>
+
+            <div class="table-area">
+              <div class="db-table-shell">
+                <div class="pagination-bar">
+                  <button id="prev-page-btn" class="btn btn-secondary" type="button">Prev</button>
+                  <span id="page-indicator" class="page-indicator">Conecta Microsoft para cargar la base.</span>
+                  <button id="next-page-btn" class="btn btn-secondary" type="button">Next</button>
+                </div>
+                <div class="table-wrap db-table-scroll">
+                  <table id="db-table" class="db-table">
+                    <thead></thead>
+                    <tbody></tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="upload-tab" class="tab-panel">
+          <div class="section-heading">
+            <div>
+              <p class="section-kicker">OCR + GPT</p>
+              <h2>Procesar nuevas facturas</h2>
+            </div>
+            <div class="toolbar">
+              <button id="process-btn" class="btn btn-primary" type="button">Procesar PDF</button>
+              <button id="keep-results-btn" class="btn btn-primary" type="button" disabled>Keep Results</button>
+              <button id="drop-results-btn" class="btn btn-secondary" type="button" disabled>Drop Results</button>
+              <button id="download-summary-btn" class="btn btn-secondary" type="button" disabled>Descargar resumen</button>
+            </div>
+          </div>
+
+          <div class="form-grid">
+            <label class="field">
+              <span>Tipo de recibo</span>
+              <select id="receipt-type-input">
+                <option value="bank_transaction">Transaccion bancaria</option>
+                <option value="reimbursement">Reembolso</option>
+              </select>
+            </label>
+
+            <label class="field">
+              <span>PDF</span>
+              <input id="pdf-input" type="file" accept=".pdf,application/pdf">
+            </label>
+
+            <label class="field">
+              <span>Company</span>
+              <select id="company-input"></select>
+            </label>
+
+            <label class="field" id="bank-field">
+              <span>Bank</span>
+              <select id="bank-input"></select>
+              <small class="field-hint">Solo aplica a transacciones bancarias.</small>
+            </label>
+
+            <label class="field" id="card-type-field">
+              <span>Card type</span>
+              <select id="card-type-input">
+                <option value="debit">debit</option>
+                <option value="credit">credit</option>
+              </select>
+              <small class="field-hint">Solo aplica a transacciones bancarias.</small>
+            </label>
+
+            <label class="field" id="card-last4-field">
+              <span>Card last 4</span>
+              <input id="card-last4-input" type="text" inputmode="numeric" maxlength="4" placeholder="1234">
+              <small class="field-hint">Obligatorio para transacciones bancarias.</small>
+            </label>
+
+            <label class="field field-wide" id="description-field">
+              <span>Description</span>
+              <textarea id="description-input" rows="3" placeholder="Texto libre aplicado a todas las paginas"></textarea>
+              <small class="field-hint">Obligatorio para reembolsos.</small>
+            </label>
+          </div>
+
+          <div class="progress-card">
+            <div class="progress-row">
+              <span>Progreso</span>
+              <span id="progress-label">Esperando PDF</span>
+            </div>
+            <progress id="progress-bar" value="0" max="100"></progress>
+          </div>
+
+          <div class="content-card">
+            <div class="results-meta">
+              <p id="upload-caption">Procesa un PDF para ver el resumen.</p>
+            </div>
+            <div class="table-wrap summary-table-scroll">
+              <table id="summary-table">
+                <thead></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+
+          <details class="raw-panel">
+            <summary>Raw OCR and GPT outputs</summary>
+            <pre id="raw-output"></pre>
+          </details>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script type="module" src="./assets/js/app.js"></script>
+</body>
+</html>

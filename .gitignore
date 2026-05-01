@@ -1,0 +1,13 @@
+.env
+.env.local
+.env.*
+!.env.example
+
+node_modules/
+.netlify/
+
+*.log
+npm-debug.log*
+
+.DS_Store
+Thumbs.db

@@ -1,0 +1,14 @@
+{
+  "name": "netlify-invoice-app",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Static frontend plus Netlify functions to replace the Streamlit invoice app.",
+  "scripts": {
+    "dev": "node dev-server.js",
+    "dev:netlify": "netlify dev",
+    "build": "echo \"No build step required\""
+  },
+  "devDependencies": {
+    "netlify-cli": "^17.37.0"
+  }
+}
