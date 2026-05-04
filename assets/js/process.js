@@ -86,6 +86,7 @@ export async function processUploadedPdf(elements) {
       gpt_merchant_name: result.gpt.merchant_name || result.compact.merchant || "",
       gpt_city: result.gpt.city || result.compact.city || "",
       gpt_province: result.gpt.province || result.compact.province || "",
+      gpt_ticket_number: result.gpt.ticket_number || "",
       gpt_description: description,
       gpt_confidence: toFloat(result.gpt.confidence, 0),
       notes: result.gpt.notes || "",
@@ -149,8 +150,8 @@ export async function keepProcessedResults() {
   for (const pending of state.processed.pendingUploads) {
     await uploadSharePointFile(pending.filePath, pending.content, "application/pdf");
   }
-  const existingRows = await loadDatabaseRows();
-  await saveDatabaseRows([...existingRows, ...state.processed.summaryRows]);
+  const database = await loadDatabaseRows();
+  await saveDatabaseRows([...database.rows, ...state.processed.summaryRows], { expectedEtag: database.eTag });
   state.processed.saved = true;
 }
 

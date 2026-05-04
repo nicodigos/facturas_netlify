@@ -1,7 +1,21 @@
 import { state } from "./state.js";
-import { joinSharePointPath, rowsToCsv } from "./utils.js";
+import { joinSharePointPath, rowsToCsv, sanitizeFilenameComponent } from "./utils.js";
 
 const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
+const BACKUP_FOLDER_NAME = "data_versions";
+const BACKUP_MARKER_FILE = "lastupdated.txt";
+const BACKUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const MAX_BACKUP_VERSIONS = 60;
+
+let backupCheckPromise = null;
+
+class GraphRequestError extends Error {
+  constructor(message, status) {
+    super(message);
+    this.name = "GraphRequestError";
+    this.status = status;
+  }
+}
 
 function authHeaders() {
   if (!state.graphToken) {
@@ -10,7 +24,7 @@ function authHeaders() {
   return { Authorization: `Bearer ${state.graphToken}` };
 }
 
-async function graphJson(url, options = {}) {
+async function graphFetch(url, options = {}) {
   const response = await fetch(url, {
     ...options,
     headers: {
@@ -19,23 +33,47 @@ async function graphJson(url, options = {}) {
     },
   });
   if (!response.ok) {
-    throw new Error(await response.text());
+    throw new GraphRequestError(await response.text(), response.status);
   }
+  return response;
+}
+
+async function graphJson(url, options = {}) {
+  const response = await graphFetch(url, options);
   return response.status === 204 ? {} : response.json();
 }
 
 async function graphBytes(url, options = {}) {
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      ...authHeaders(),
-      ...(options.headers || {}),
-    },
+  const response = await graphFetch(url, options);
+  return {
+    bytes: await response.arrayBuffer(),
+    eTag: response.headers.get("etag"),
+  };
+}
+
+async function downloadSharePointFileWithMeta(path) {
+  const driveId = await resolveDriveId();
+  const encodedPath = encodeURIComponent(path).replaceAll("%2F", "/");
+  return graphBytes(`${GRAPH_BASE}/drives/${driveId}/root:/${encodedPath}:/content`);
+}
+
+async function deleteSharePointItemById(itemId) {
+  const driveId = await resolveDriveId();
+  await graphFetch(`${GRAPH_BASE}/drives/${driveId}/items/${itemId}`, { method: "DELETE" });
+}
+
+async function createSharePointFolder(parentPath, folderName) {
+  const driveId = await resolveDriveId();
+  const encodedParentPath = encodeURIComponent(parentPath).replaceAll("%2F", "/");
+  return graphJson(`${GRAPH_BASE}/drives/${driveId}/root:/${encodedParentPath}:/children`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: folderName,
+      folder: {},
+      "@microsoft.graph.conflictBehavior": "replace",
+    }),
   });
-  if (!response.ok) {
-    throw new Error(await response.text());
-  }
-  return response.arrayBuffer();
 }
 
 export async function resolveDriveId() {
@@ -54,43 +92,172 @@ export async function resolveDriveId() {
 export async function listChildrenByPath(path) {
   const driveId = await resolveDriveId();
   const encodedPath = encodeURIComponent(path).replaceAll("%2F", "/");
-  const url = `${GRAPH_BASE}/drives/${driveId}/root:/${encodedPath}:/children?$top=200&$select=id,name,folder,file,webUrl`;
-  const data = await graphJson(url);
-  return data.value || [];
+  try {
+    const url = `${GRAPH_BASE}/drives/${driveId}/root:/${encodedPath}:/children?$top=200&$select=id,name,folder,file,webUrl,lastModifiedDateTime`;
+    const data = await graphJson(url);
+    return data.value || [];
+  } catch (error) {
+    if (error instanceof GraphRequestError && error.status === 404) {
+      return [];
+    }
+    throw error;
+  }
 }
 
 export async function downloadSharePointFile(path) {
-  const driveId = await resolveDriveId();
-  const encodedPath = encodeURIComponent(path).replaceAll("%2F", "/");
-  const buffer = await graphBytes(`${GRAPH_BASE}/drives/${driveId}/root:/${encodedPath}:/content`);
-  return new Uint8Array(buffer);
+  const { bytes } = await downloadSharePointFileWithMeta(path);
+  return new Uint8Array(bytes);
 }
 
-export async function uploadSharePointFile(path, content, contentType = "application/octet-stream") {
+export async function uploadSharePointFile(path, content, contentType = "application/octet-stream", options = {}) {
   const driveId = await resolveDriveId();
   const encodedPath = encodeURIComponent(path).replaceAll("%2F", "/");
   return graphJson(`${GRAPH_BASE}/drives/${driveId}/root:/${encodedPath}:/content`, {
     method: "PUT",
-    headers: { "Content-Type": contentType },
+    headers: {
+      "Content-Type": contentType,
+      ...(options.expectedEtag === null ? { "If-None-Match": "*" } : {}),
+      ...(options.expectedEtag ? { "If-Match": options.expectedEtag } : {}),
+    },
     body: content,
   });
 }
 
 export async function loadDatabaseRows() {
+  await ensureDailyCsvBackup();
   const csvPath = joinSharePointPath(state.config.receiptsDatabaseDir, state.config.receiptsDatabaseCsv);
   try {
-    const bytes = await downloadSharePointFile(csvPath);
+    const { bytes, eTag } = await downloadSharePointFileWithMeta(csvPath);
     const text = new TextDecoder("utf-8").decode(bytes);
-    return parseCsv(text);
-  } catch {
-    return [];
+    return { rows: parseCsv(text), eTag };
+  } catch (error) {
+    if (error instanceof GraphRequestError && error.status === 404) {
+      return { rows: [], eTag: null };
+    }
+    if (error instanceof GraphRequestError) {
+      throw new Error("No se pudo leer el CSV de SharePoint. Recarga antes de volver a guardar.");
+    }
+    throw new Error("El CSV de SharePoint no se pudo parsear. Revisa el archivo antes de volver a guardar.");
   }
 }
 
-export async function saveDatabaseRows(rows) {
+export async function saveDatabaseRows(rows, options = {}) {
+  await ensureDailyCsvBackup();
   const csvPath = joinSharePointPath(state.config.receiptsDatabaseDir, state.config.receiptsDatabaseCsv);
   const csvText = rowsToCsv(rows);
-  await uploadSharePointFile(csvPath, new TextEncoder().encode(csvText), "text/csv;charset=utf-8");
+  try {
+    const item = await uploadSharePointFile(
+      csvPath,
+      new TextEncoder().encode(csvText),
+      "text/csv;charset=utf-8",
+      { expectedEtag: options.expectedEtag },
+    );
+    return item.eTag || null;
+  } catch (error) {
+    if (error instanceof GraphRequestError && (error.status === 409 || error.status === 412)) {
+      throw new Error("El CSV cambio en SharePoint desde tu ultima carga. Recarga la base antes de guardar para evitar sobreescribir cambios ajenos.");
+    }
+    throw error;
+  }
+}
+
+async function ensureDailyCsvBackup() {
+  if (!backupCheckPromise) {
+    backupCheckPromise = runDailyCsvBackupCheck().finally(() => {
+      backupCheckPromise = null;
+    });
+  }
+  return backupCheckPromise;
+}
+
+async function runDailyCsvBackupCheck() {
+  const { csvPath, backupDirPath, markerPath } = getBackupPaths();
+  await ensureBackupFolderExists(backupDirPath);
+  const lastUpdatedAt = await readBackupMarker(markerPath);
+  if (!shouldCreateBackup(lastUpdatedAt)) {
+    return;
+  }
+
+  let csvBytes;
+  try {
+    const downloaded = await downloadSharePointFileWithMeta(csvPath);
+    csvBytes = downloaded.bytes;
+  } catch (error) {
+    if (error instanceof GraphRequestError && error.status === 404) {
+      await writeBackupMarker(markerPath, new Date());
+      return;
+    }
+    throw new Error("No se pudo leer el CSV para generar la version diaria.");
+  }
+
+  const backupFilePath = joinSharePointPath(backupDirPath, buildBackupFileName());
+  await uploadSharePointFile(backupFilePath, new Uint8Array(csvBytes), "text/csv;charset=utf-8");
+  await trimBackupVersions(backupDirPath);
+  await writeBackupMarker(markerPath, new Date());
+}
+
+function getBackupPaths() {
+  const csvPath = joinSharePointPath(state.config.receiptsDatabaseDir, state.config.receiptsDatabaseCsv);
+  const backupDirPath = joinSharePointPath(state.config.receiptsDatabaseDir, BACKUP_FOLDER_NAME);
+  const markerPath = joinSharePointPath(backupDirPath, BACKUP_MARKER_FILE);
+  return { csvPath, backupDirPath, markerPath };
+}
+
+async function ensureBackupFolderExists(backupDirPath) {
+  const parentPath = state.config.receiptsDatabaseDir;
+  const folderName = BACKUP_FOLDER_NAME;
+  const children = await listChildrenByPath(parentPath);
+  const folder = children.find((item) => item.folder && item.name === folderName);
+  if (folder) return;
+  await createSharePointFolder(parentPath, folderName);
+}
+
+async function readBackupMarker(path) {
+  try {
+    const { bytes } = await downloadSharePointFileWithMeta(path);
+    const text = new TextDecoder("utf-8").decode(bytes).trim();
+    const match = text.match(/lastupdated at\s*[:=]\s*(.+)$/i);
+    const value = match ? match[1].trim() : text;
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  } catch (error) {
+    if (error instanceof GraphRequestError && error.status === 404) {
+      return null;
+    }
+    throw new Error("No se pudo leer el archivo de control de versiones del CSV.");
+  }
+}
+
+function shouldCreateBackup(lastUpdatedAt) {
+  if (!(lastUpdatedAt instanceof Date)) return true;
+  return (Date.now() - lastUpdatedAt.getTime()) > BACKUP_INTERVAL_MS;
+}
+
+function buildBackupFileName() {
+  const baseName = sanitizeFilenameComponent(
+    state.config.receiptsDatabaseCsv.replace(/\.csv$/i, ""),
+    "receipts_database",
+  );
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  return `${baseName}__${timestamp}.csv`;
+}
+
+async function trimBackupVersions(backupDirPath) {
+  const children = await listChildrenByPath(backupDirPath);
+  const csvFiles = children
+    .filter((item) => item.file && /\.csv$/i.test(item.name))
+    .sort((left, right) => new Date(left.lastModifiedDateTime || 0) - new Date(right.lastModifiedDateTime || 0));
+
+  while (csvFiles.length > MAX_BACKUP_VERSIONS) {
+    const oldest = csvFiles.shift();
+    if (!oldest?.id) break;
+    await deleteSharePointItemById(oldest.id);
+  }
+}
+
+async function writeBackupMarker(path, date) {
+  const content = `lastupdated at: ${date.toISOString()}\n`;
+  await uploadSharePointFile(path, new TextEncoder().encode(content), "text/plain;charset=utf-8");
 }
 
 function parseCsv(text) {

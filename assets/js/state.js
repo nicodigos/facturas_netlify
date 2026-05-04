@@ -3,6 +3,7 @@ export const state = {
   graphToken: sessionStorage.getItem("graphToken") || "",
   driveId: "",
   databaseRows: [],
+  databaseEtag: null,
   filteredRows: [],
   filters: {},
   pagination: {

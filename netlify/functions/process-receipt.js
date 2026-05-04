@@ -297,7 +297,7 @@ async function classifyWithGpt(vision, compact, receiptType, apiKey) {
   const previousYear = currentYear - 1;
   const systemPrompt = [
     "You are extracting fields from an invoice OCR result.",
-    "Return JSON only with keys: payment_date, total_amount, taxes_total, gst, hst, pst, qst, tps, iva, vat, retention, category, confidence, merchant_name, city, province, notes.",
+    "Return JSON only with keys: payment_date, total_amount, taxes_total, gst, hst, pst, qst, tps, iva, vat, retention, category, confidence, merchant_name, city, province, ticket_number, notes.",
     `Category must be one of: ${ALLOWED_CATEGORIES.join(", ")}.`,
     "payment_date must be ISO datetime when possible. Monetary fields must be numbers.",
     "Use 0 for any tax field not present. taxes_total should equal the sum of detected taxes when possible.",
@@ -308,11 +308,12 @@ async function classifyWithGpt(vision, compact, receiptType, apiKey) {
   ].join(" ");
 
   const baseUserPrompt = [
-    "Esto viene de un invoice. Quiero que llenes estos campos: payment_date, total_amount, taxes_total, gst, hst, pst, qst, tps, iva, vat, retention, category, merchant_name, city, province.",
+    "Esto viene de un invoice. Quiero que llenes estos campos: payment_date, total_amount, taxes_total, gst, hst, pst, qst, tps, iva, vat, retention, category, merchant_name, city, province, ticket_number.",
     `El tipo de recibo elegido en el formulario es: ${receiptType}.`,
     "Prefer OCR evidence. Even if uncertain, choose the best category from the allowed list instead of defaulting generically.",
     "Use Diverse Expenses only if the receipt genuinely does not fit any more specific allowed category.",
     "Map each specific tax into its own field: GST, HST, PST, QST/TVQ, TPS, IVA, VAT, retention/withholding. Leave missing fields as 0.",
+    "ticket_number should be the receipt number, ticket number, invoice number, folio, reference, transaction id, or similar document identifier when visible. If none is visible, return an empty string.",
     "Choose the best category even if several seem plausible. Use the merchant name, line item words, and overall receipt purpose together.",
     "Use Credit Card Payment only for a card statement or payment receipt, not for ordinary purchases paid by card.",
     "Use Tax Payments for remittances and government tax payments, not normal purchases that merely include taxes.",
@@ -456,9 +457,10 @@ async function runGptReceiptPass(systemPrompt, userPrompt, apiKey) {
               merchant_name: { type: "string" },
               city: { type: "string" },
               province: { type: "string" },
+              ticket_number: { type: "string" },
               notes: { type: "string" },
             },
-            required: ["payment_date", "total_amount", "taxes_total", "gst", "hst", "pst", "qst", "tps", "iva", "vat", "retention", "category", "confidence", "merchant_name", "city", "province", "notes"],
+            required: ["payment_date", "total_amount", "taxes_total", "gst", "hst", "pst", "qst", "tps", "iva", "vat", "retention", "category", "confidence", "merchant_name", "city", "province", "ticket_number", "notes"],
           },
         },
       },
@@ -491,6 +493,7 @@ function normalizeModelCandidate(parsed) {
     merchant_name: String(parsed.merchant_name || "").trim(),
     city: String(parsed.city || "").trim(),
     province: String(parsed.province || "").trim(),
+    ticket_number: String(parsed.ticket_number || "").trim(),
     notes: String(parsed.notes || "").trim().split(/\s+/).slice(0, 20).join(" "),
   };
 }
@@ -526,6 +529,7 @@ function scoreGptCandidate(candidate, compact, categoryVote) {
   if (candidate.merchant_name) score += 8;
   if (candidate.city) score += 3;
   if (candidate.province) score += 3;
+  if (candidate.ticket_number) score += 4;
   if (candidate.total_amount > 0) score += 12;
   if (candidate.taxes_total >= 0) score += 4;
   if (candidate.notes) score += 2;

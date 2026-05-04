@@ -38,7 +38,9 @@ const RANGE_FILTER_COLUMNS = [
 ];
 
 export async function refreshDatabase(elements) {
-  state.databaseRows = await loadDatabaseRows();
+  const database = await loadDatabaseRows();
+  state.databaseRows = database.rows;
+  state.databaseEtag = database.eTag;
   renderFilters(elements.filtersContainer);
   applyFilters(elements);
 }
@@ -265,7 +267,8 @@ export function syncEditedRowsFromDom() {
 
 export async function saveDatabaseEdits() {
   syncEditedRowsFromDom();
-  await saveDatabaseRows(state.databaseRows);
+  const nextEtag = await saveDatabaseRows(state.databaseRows, { expectedEtag: state.databaseEtag });
+  state.databaseEtag = nextEtag;
 }
 
 export function goToPreviousPage(elements) {

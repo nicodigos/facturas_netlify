@@ -30,6 +30,7 @@ const SUMMARY_PREFERRED_COLUMNS = [
   "gpt_retention",
   "gpt_category",
   "gpt_merchant_name",
+  "gpt_ticket_number",
   "gpt_city",
   "gpt_province",
   "gpt_description",
@@ -371,7 +372,7 @@ function getSummaryColumnWidth(column) {
   if (["gpt_total_amount", "gpt_taxes_total"].includes(column)) {
     return 14;
   }
-  if (["receipt_type", "company", "gpt_category", "gpt_city", "gpt_province"].includes(column)) {
+  if (["receipt_type", "company", "gpt_category", "gpt_city", "gpt_province", "gpt_ticket_number"].includes(column)) {
     return 18;
   }
   if (["gpt_merchant_name", "gpt_description", "notes"].includes(column)) {
