@@ -291,7 +291,7 @@ export function downloadFilteredExcel() {
   }
   const exportRows = state.filteredRows.map((row) => ({
     ...row,
-    card_last4: displayCardLast4(row.card_last4),
+    card_last4: row.card_last4 || "",
   }));
   const worksheet = XLSX.utils.json_to_sheet(exportRows);
   const workbook = XLSX.utils.book_new();

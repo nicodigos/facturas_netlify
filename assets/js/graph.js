@@ -1,5 +1,5 @@
 import { state } from "./state.js";
-import { joinSharePointPath, rowsToCsv, sanitizeFilenameComponent } from "./utils.js";
+import { joinSharePointPath, normalizeCardLast4, rowsToCsv, sanitizeFilenameComponent } from "./utils.js";
 
 const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
 const BACKUP_FOLDER_NAME = "data_versions";
@@ -271,10 +271,26 @@ function parseCsv(text) {
     const { checked, ...rest } = row;
     return {
       ...rest,
+      card_last4: normalizeStoredCardLast4(rest.card_last4),
       receipt_type: normalizedReceiptType,
       status: normalizedStatus,
     };
   });
+}
+
+function normalizeStoredCardLast4(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+
+  const digits = raw.replace(/\D/g, "");
+  if (digits.length >= 1 && digits.length <= 4) {
+    return `N${digits.padStart(4, "0")}`;
+  }
+
+  const normalized = normalizeCardLast4(raw);
+  if (normalized) return normalized;
+
+  return raw;
 }
 
 function normalizeStatus(value) {
