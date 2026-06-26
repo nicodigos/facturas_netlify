@@ -12,7 +12,7 @@ export async function splitPdfToPages(file) {
     const [copiedPage] = await singlePdf.copyPages(sourcePdf, [index]);
     singlePdf.addPage(copiedPage);
     const pdfBytes = await singlePdf.save();
-    const imageBase64 = await renderPdfPageToPng(pdfBytes, index + 1);
+    const imageBase64 = await renderPdfPageToPng(new Uint8Array(pdfBytes), index + 1);
     pages.push({
       pageNumber: index + 1,
       pdfBytes,

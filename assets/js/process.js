@@ -30,6 +30,8 @@ export async function processUploadedPdf(elements) {
     throw new Error("No se detectaron paginas en el PDF.");
   }
 
+  const database = await loadDatabaseRows();
+  const duplicateScopeRows = [...database.rows];
   const existingNames = new Set((await listChildrenByPath(state.config.receiptsDatabaseDir)).map((item) => item.name));
   const summaryRows = [];
   const rawRows = [];
@@ -40,6 +42,13 @@ export async function processUploadedPdf(elements) {
     const page = pages[index];
     elements.progressBar.value = Math.round(((index + 1) / pages.length) * 100);
     elements.progressLabel.textContent = `Procesando pagina ${page.pageNumber} de ${pages.length}`;
+    const pdfSha256 = await sha256Hex(page.pdfBytes);
+
+    const exactDuplicate = duplicateScopeRows.find((row) => row.pdf_sha256 && row.pdf_sha256 === pdfSha256);
+    if (exactDuplicate) {
+      errors.push(`Pagina ${page.pageNumber}: omitida porque ya existe como ${exactDuplicate.file_name || "invoice previo"}.`);
+      continue;
+    }
 
     let result;
     try {
@@ -60,14 +69,6 @@ export async function processUploadedPdf(elements) {
       result.gpt.merchant_name || result.compact.merchant,
       toFloat(result.gpt.total_amount, result.compact.total),
     );
-    const uniqueName = makeUniquePdfName(baseName, existingNames);
-    const remotePath = joinSharePointPath(state.config.receiptsDatabaseDir, uniqueName);
-
-    pendingUploads.push({
-      fileName: uniqueName,
-      filePath: remotePath,
-      content: page.pdfBytes,
-    });
 
     const row = {
       status: "Pending",
@@ -90,11 +91,29 @@ export async function processUploadedPdf(elements) {
       gpt_description: description,
       gpt_confidence: toFloat(result.gpt.confidence, 0),
       notes: result.gpt.notes || "",
-      file_name: uniqueName,
-      file_path: remotePath,
+      file_name: "",
+      file_path: "",
+      pdf_sha256: pdfSha256,
     };
+    row.invoice_fingerprint = buildInvoiceFingerprint(row);
 
+    const logicalDuplicate = findDuplicateInvoice(row, duplicateScopeRows);
+    if (logicalDuplicate) {
+      errors.push(`Pagina ${page.pageNumber}: posible duplicado omitido (${describeDuplicate(logicalDuplicate)}).`);
+      continue;
+    }
+
+    const uniqueName = makeUniquePdfName(baseName, existingNames);
+    const remotePath = joinSharePointPath(state.config.receiptsDatabaseDir, uniqueName);
+    row.file_name = uniqueName;
+    row.file_path = remotePath;
+    pendingUploads.push({
+      fileName: uniqueName,
+      filePath: remotePath,
+      content: page.pdfBytes,
+    });
     summaryRows.push(row);
+    duplicateScopeRows.push(row);
     rawRows.push({
       ...row,
       raw_google_vision_json: JSON.stringify(result.vision),
@@ -147,10 +166,23 @@ function makeUniquePdfName(baseName, existingNames) {
 }
 
 export async function keepProcessedResults() {
+  const database = await loadDatabaseRows();
+  const duplicateScopeRows = [...database.rows];
+
+  for (const row of state.processed.summaryRows) {
+    const duplicate = findDuplicateInvoice(row, duplicateScopeRows);
+    if (duplicate) {
+      throw new Error(`No se guardo ${row.file_name}: parece duplicado de ${describeDuplicate(duplicate)}. Recarga y revisa la base.`);
+    }
+    duplicateScopeRows.push(row);
+  }
+
   for (const pending of state.processed.pendingUploads) {
+    if (!pending.content?.byteLength) {
+      throw new Error(`No se guardo ${pending.fileName}: el PDF generado esta vacio. Vuelve a procesar el archivo antes de guardar.`);
+    }
     await uploadSharePointFile(pending.filePath, pending.content, "application/pdf");
   }
-  const database = await loadDatabaseRows();
   await saveDatabaseRows([...database.rows, ...state.processed.summaryRows], { expectedEtag: database.eTag });
   state.processed.saved = true;
 }
@@ -159,4 +191,105 @@ function buildTaxColumns(prefix, source) {
   return Object.fromEntries(
     TAX_FIELDS.map((field) => [`${prefix}_${field}`, toFloat(source?.[field], 0)]),
   );
+}
+
+async function sha256Hex(bytes) {
+  const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  const digest = await crypto.subtle.digest("SHA-256", buffer);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function findDuplicateInvoice(row, existingRows) {
+  return existingRows.find((existing) => invoicesMatch(row, existing));
+}
+
+function invoicesMatch(left, right) {
+  if (left.pdf_sha256 && right.pdf_sha256 && left.pdf_sha256 === right.pdf_sha256) {
+    return true;
+  }
+
+  const leftFingerprint = left.invoice_fingerprint || buildInvoiceFingerprint(left);
+  const rightFingerprint = right.invoice_fingerprint || buildInvoiceFingerprint(right);
+  if (leftFingerprint && rightFingerprint && leftFingerprint === rightFingerprint) {
+    return true;
+  }
+
+  if (paymentSourceKey(left) !== paymentSourceKey(right)) return false;
+  if (amountKey(left.gpt_total_amount) !== amountKey(right.gpt_total_amount)) return false;
+
+  const leftTicket = normalizeIdentifier(left.gpt_ticket_number);
+  const rightTicket = normalizeIdentifier(right.gpt_ticket_number);
+  if (leftTicket && rightTicket && leftTicket === rightTicket) {
+    return extractDateOnly(left.gpt_payment_date) === extractDateOnly(right.gpt_payment_date)
+      || merchantsRoughlyMatch(left.gpt_merchant_name, right.gpt_merchant_name);
+  }
+
+  return Boolean(
+    extractDateOnly(left.gpt_payment_date)
+      && extractDateOnly(left.gpt_payment_date) === extractDateOnly(right.gpt_payment_date)
+      && merchantsRoughlyMatch(left.gpt_merchant_name, right.gpt_merchant_name),
+  );
+}
+
+function buildInvoiceFingerprint(row) {
+  const source = paymentSourceKey(row);
+  const amount = amountKey(row.gpt_total_amount);
+  const ticket = normalizeIdentifier(row.gpt_ticket_number);
+  const date = extractDateOnly(row.gpt_payment_date);
+  const merchant = normalizeMerchant(row.gpt_merchant_name);
+
+  if (!source || !amount) return "";
+  if (ticket) return ["ticket", source, ticket, amount, date].join("|");
+  if (date && merchant) return ["scan", source, date, amount, merchant].join("|");
+  return "";
+}
+
+function paymentSourceKey(row) {
+  return [
+    normalizeIdentifier(row.receipt_type || "bank_transaction"),
+    normalizeIdentifier(row.company),
+    normalizeIdentifier(row.bank),
+    normalizeIdentifier(row.card_type),
+    normalizeIdentifier(row.card_last4),
+  ].join("|");
+}
+
+function amountKey(value) {
+  const amount = toFloat(value, NaN);
+  return Number.isFinite(amount) ? String(Math.round(amount * 100)) : "";
+}
+
+function extractDateOnly(value) {
+  return String(value || "").match(/\d{4}-\d{2}-\d{2}/)?.[0] || "";
+}
+
+function normalizeIdentifier(value) {
+  return String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/[^A-Z0-9]+/g, "");
+}
+
+function normalizeMerchant(value) {
+  return normalizeIdentifier(value)
+    .replace(/\b(INC|LTD|LLC|CORP|CORPORATION|LIMITED|COMPANY|CO)\b/g, "")
+    .replace(/0/g, "O")
+    .replace(/1/g, "I");
+}
+
+function merchantsRoughlyMatch(left, right) {
+  const normalizedLeft = normalizeMerchant(left);
+  const normalizedRight = normalizeMerchant(right);
+  if (!normalizedLeft || !normalizedRight) return false;
+  if (normalizedLeft === normalizedRight) return true;
+  if (normalizedLeft.length >= 6 && normalizedRight.length >= 6) {
+    return normalizedLeft.includes(normalizedRight) || normalizedRight.includes(normalizedLeft);
+  }
+  return false;
+}
+
+function describeDuplicate(row) {
+  return [
+    row.file_name,
+    extractDateOnly(row.gpt_payment_date),
+    row.gpt_merchant_name,
+    row.gpt_total_amount,
+  ].filter(Boolean).join(" / ") || "invoice previo";
 }

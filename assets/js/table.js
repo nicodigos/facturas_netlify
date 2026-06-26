@@ -37,6 +37,8 @@ const RANGE_FILTER_COLUMNS = [
   ...TAX_COLUMNS.map((key) => ({ key, label: formatColumnLabel(key) })),
 ];
 
+const INTERNAL_COLUMNS = ["pdf_sha256", "invoice_fingerprint"];
+
 export async function refreshDatabase(elements) {
   const database = await loadDatabaseRows();
   state.databaseRows = database.rows;
@@ -180,7 +182,7 @@ export function applyFilters(elements) {
 
 function renderDatabaseTable(elements) {
   const { dbTableHead: head, dbTableBody: body } = elements;
-  const rowColumns = collectRowColumns(state.databaseRows).filter((column) => column !== "checked");
+  const rowColumns = collectRowColumns(state.databaseRows).filter((column) => column !== "checked" && !INTERNAL_COLUMNS.includes(column));
   const columns = prioritizeColumns(rowColumns);
   if (!columns.length) {
     head.innerHTML = "";
