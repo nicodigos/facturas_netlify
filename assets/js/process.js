@@ -1,6 +1,6 @@
 import { state } from "./state.js";
 import { buildSuggestedFileName, joinSharePointPath, normalizeCardLast4, toFloat } from "./utils.js";
-import { listChildrenByPath, loadDatabaseRows, saveDatabaseRows, uploadSharePointFile } from "./graph.js";
+import { deleteSharePointItemById, listChildrenByPath, loadDatabaseRows, saveDatabaseRows, uploadSharePointFile } from "./graph.js";
 import { splitPdfToPages } from "./pdf.js";
 
 const TAX_FIELDS = ["gst", "hst", "pst", "qst", "tps", "iva", "vat", "retention"];
@@ -169,20 +169,40 @@ export async function keepProcessedResults() {
   const database = await loadDatabaseRows();
   const duplicateScopeRows = [...database.rows];
 
+  for (const pending of state.processed.pendingUploads) {
+    if (!pending.content?.byteLength) {
+      throw new Error(`No se guardo ningun PDF: ${pending.fileName} esta vacio. Vuelve a procesar el archivo antes de guardar.`);
+    }
+  }
+
   for (const row of state.processed.summaryRows) {
     const duplicate = findDuplicateInvoice(row, duplicateScopeRows);
     if (duplicate) {
-      throw new Error(`No se guardo ${row.file_name}: parece duplicado de ${describeDuplicate(duplicate)}. Recarga y revisa la base.`);
+      throw new Error(`No se guardo ningun PDF: ${row.file_name} parece duplicado de ${describeDuplicate(duplicate)}. Recarga y revisa la base.`);
     }
     duplicateScopeRows.push(row);
   }
 
-  for (const pending of state.processed.pendingUploads) {
-    if (!pending.content?.byteLength) {
-      throw new Error(`No se guardo ${pending.fileName}: el PDF generado esta vacio. Vuelve a procesar el archivo antes de guardar.`);
+  const uploadedItems = [];
+  try {
+    for (const pending of state.processed.pendingUploads) {
+      const uploaded = await uploadSharePointFile(pending.filePath, pending.content, "application/pdf");
+      if (uploaded?.id) {
+        uploadedItems.push(uploaded);
+      }
+      if (uploaded?.size === 0) {
+        throw new Error(`${pending.fileName} llego a SharePoint con peso 0.`);
+      }
     }
-    await uploadSharePointFile(pending.filePath, pending.content, "application/pdf");
+  } catch (error) {
+    try {
+      await rollbackUploadedItems(uploadedItems);
+    } catch (rollbackError) {
+      throw new Error(`El lote fallo y el CSV no fue actualizado: ${error.message} ${rollbackError.message}`);
+    }
+    throw new Error(`No se guardo ningun PDF ni se actualizo el CSV: ${error.message}`);
   }
+
   await saveDatabaseRows([...database.rows, ...state.processed.summaryRows], { expectedEtag: database.eTag });
   state.processed.saved = true;
 }
@@ -191,6 +211,20 @@ function buildTaxColumns(prefix, source) {
   return Object.fromEntries(
     TAX_FIELDS.map((field) => [`${prefix}_${field}`, toFloat(source?.[field], 0)]),
   );
+}
+
+async function rollbackUploadedItems(items) {
+  const failures = [];
+  for (const item of items.reverse()) {
+    try {
+      await deleteSharePointItemById(item.id);
+    } catch (error) {
+      failures.push(item.name || item.id);
+    }
+  }
+  if (failures.length) {
+    throw new Error(`No se pudo deshacer la subida de: ${failures.join(", ")}.`);
+  }
 }
 
 async function sha256Hex(bytes) {

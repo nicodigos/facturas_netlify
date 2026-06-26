@@ -57,7 +57,7 @@ async function downloadSharePointFileWithMeta(path) {
   return graphBytes(`${GRAPH_BASE}/drives/${driveId}/root:/${encodedPath}:/content`);
 }
 
-async function deleteSharePointItemById(itemId) {
+export async function deleteSharePointItemById(itemId) {
   const driveId = await resolveDriveId();
   await graphFetch(`${GRAPH_BASE}/drives/${driveId}/items/${itemId}`, { method: "DELETE" });
 }
